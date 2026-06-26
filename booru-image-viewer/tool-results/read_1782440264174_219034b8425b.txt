@@ -1,0 +1,815 @@
+     1→'use client';
+     2→
+     3→import { useCallback, useEffect, useState } from 'react';
+     4→import { Button } from '@/components/ui/button';
+     5→import { Input } from '@/components/ui/input';
+     6→import { Label } from '@/components/ui/label';
+     7→import { Slider } from '@/components/ui/slider';
+     8→import { Badge } from '@/components/ui/badge';
+     9→import { Skeleton } from '@/components/ui/skeleton';
+    10→import {
+    11→  Dialog,
+    12→  DialogContent,
+    13→  DialogTitle,
+    14→} from '@/components/ui/dialog';
+    15→import {
+    16→  Select,
+    17→  SelectContent,
+    18→  SelectItem,
+    19→  SelectTrigger,
+    20→  SelectValue,
+    21→} from '@/components/ui/select';
+    22→import {
+    23→  DropdownMenu,
+    24→  DropdownMenuContent,
+    25→  DropdownMenuItem,
+    26→  DropdownMenuTrigger,
+    27→} from '@/components/ui/dropdown-menu';
+    28→import { Toaster } from '@/components/ui/toaster';
+    29→import { useToast } from '@/hooks/use-toast';
+    30→import { Loader2, Search, Moon, Sun, ChevronLeft, ChevronRight, ExternalLink, Info } from 'lucide-react';
+    31→import { useTheme } from 'next-themes';
+    32→import { useMounted } from '@/hooks/use-mounted';
+    33→
+    34→/* ----------------------------- types ----------------------------- */
+    35→
+    36→interface NormalizedPost {
+    37→  id: number | string;
+    38→  file_url: string | null;
+    39→  preview_url: string | null;
+    40→  sample_url: string | null;
+    41→  tags: string[];
+    42→  score: number;
+    43→  rating: string;
+    44→  width: number | null;
+    45→  height: number | null;
+    46→  source: string | null;
+    47→}
+    48→
+    49→interface ApiResponse {
+    50→  count: number;
+    51→  source: string;
+    52→  posts: NormalizedPost[];
+    53→}
+    54→
+    55→interface ApiError {
+    56→  error: string;
+    57→  detail?: string;
+    58→}
+    59→
+    60→/* ----------------------- preset host buttons ---------------------- */
+    61→
+    62→const PRESET_HOSTS: { label: string; url: string; note: string }[] = [
+    63→  {
+    64→    label: 'Gelbooru',
+    65→    url: 'https://gelbooru.com/index.php?page=dapi&s=post&q=index&json=1',
+    66→    note: 'rating:general recommended',
+    67→  },
+    68→  {
+    69→    label: 'Danbooru',
+    70→    url: 'https://danbooru.donmai.us/posts.json?tags=',
+    71→    note: 'requires rating:g in tags',
+    72→  },
+    73→  {
+    74→    label: 'Safebooru',
+    75→    url: 'https://safebooru.org/index.php?page=dapi&s=post&q=index&json=1',
+    76→    note: 'safe-only by default',
+    77→  },
+    78→  {
+    79→    label: 'Rule34',
+    80→    url: 'https://api.rule34.xxx/index.php?page=dapi&s=post&q=index&json=1',
+    81→    note: 'rating:general recommended',
+    82→  },
+    83→  {
+    84→    label: 'yande.re',
+    85→    url: 'https://yande.re/post.json?limit=100',
+    86→    note: 'add tags=rating:safe',
+    87→  },
+    88→  {
+    89→    label: 'Konachan',
+    90→    url: 'https://konachan.com/post.json?limit=100',
+    91→    note: 'add tags=rating:safe',
+    92→  },
+    93→];
+    94→
+    95→/* --------------------------- main page ---------------------------- */
+    96→
+    97→export default function Home() {
+    98→  return (
+    99→    <div className="min-h-screen flex flex-col bg-background text-foreground">
+   100→      <Header />
+   101→      <main className="flex-1 container mx-auto px-4 py-6 max-w-7xl w-full">
+   102→        <ControlPanel />
+   103→        <ResultsArea />
+   104→      </main>
+   105→      <Footer />
+   106→      <Toaster />
+   107→    </div>
+   108→  );
+   109→}
+   110→
+   111→/* ----------------------------- header ----------------------------- */
+   112→
+   113→function Header() {
+   114→  const { theme, setTheme } = useTheme();
+   115→  const mounted = useMounted();
+   116→
+   117→  return (
+   118→    <header className="sticky top-0 z-30 border-b border-border bg-background/80 backdrop-blur">
+   119→      <div className="container mx-auto max-w-7xl px-4 h-14 flex items-center justify-between">
+   120→        <div className="flex items-center gap-2">
+   121→          <div className="h-7 w-7 rounded bg-primary flex items-center justify-center">
+   122→            <span className="text-primary-foreground font-bold text-sm">B</span>
+   123→          </div>
+   124→          <h1 className="text-base sm:text-lg font-semibold tracking-tight">
+   125→            Booru Image Viewer
+   126→          </h1>
+   127→        </div>
+   128→        <div className="flex items-center gap-2">
+   129→          <DropdownMenu>
+   130→            <DropdownMenuTrigger asChild>
+   131→              <Button variant="ghost" size="sm" className="gap-1">
+   132→                <Info className="h-4 w-4" />
+   133→                <span className="hidden sm:inline">Help</span>
+   134→              </Button>
+   135→            </DropdownMenuTrigger>
+   136→            <DropdownMenuContent align="end" className="w-80">
+   137→              <div className="p-3 text-xs space-y-2 text-muted-foreground">
+   138→                <p className="font-medium text-foreground text-sm">How to use</p>
+   139→                <ol className="list-decimal pl-4 space-y-1">
+   140→                  <li>Paste any booru-style JSON API URL into the field.</li>
+   141→                  <li>Optionally enter tags (space-separated).</li>
+   142→                  <li>Pick a score floor with the slider.</li>
+   143→                  <li>Click <strong>Load</strong>.</li>
+   144→                </ol>
+   145→                <p className="pt-1">
+   146→                  For Gelbooru, use:
+   147→                  <code className="block bg-muted rounded p-1.5 mt-1 text-[10px] break-all">
+   148→                    https://gelbooru.com/index.php?page=dapi&s=post&q=index&json=1
+   149→                  </code>
+   150→                </p>
+   151→              </div>
+   152→            </DropdownMenuContent>
+   153→          </DropdownMenu>
+   154→          <Button
+   155→            variant="ghost"
+   156→            size="icon"
+   157→            aria-label="Toggle theme"
+   158→            onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+   159→          >
+   160→            {mounted && theme === 'dark' ? (
+   161→              <Sun className="h-4 w-4" />
+   162→            ) : (
+   163→              <Moon className="h-4 w-4" />
+   164→            )}
+   165→          </Button>
+   166→        </div>
+   167→      </div>
+   168→    </header>
+   169→  );
+   170→}
+   171→
+   172→/* ------------------------- control panel -------------------------- */
+   173→
+   174→function ControlPanel() {
+   175→  const {
+   176→    apiUrl,
+   177→    setApiUrl,
+   178→    tags,
+   179→    setTags,
+   180→    scoreFloor,
+   181→    setScoreFloor,
+   182→    limit,
+   183→    setLimit,
+   184→    page,
+   185→    setPage,
+   186→    loading,
+   187→    error,
+   188→    fetchImages,
+   189→    setRawResults,
+   190→  } = useBooruStore();
+   191→
+   192→  const { toast } = useToast();
+   193→
+   194→  const onPreset = (url: string) => {
+   195→    setApiUrl(url);
+   196→    toast({ title: 'Preset loaded', description: url });
+   197→  };
+   198→
+   199→  const onLoad = () => {
+   200→    if (!apiUrl.trim()) {
+   201→      toast({
+   202→        title: 'Missing URL',
+   203→        description: 'Paste a booru API URL first.',
+   204→        variant: 'destructive',
+   205→      });
+   206→      return;
+   207→    }
+   208→    setPage(0);
+   209→    fetchImages(0);
+   210→  };
+   211→
+   212→  return (
+   213→    <section className="space-y-4">
+   214→    {/* (control panel below) */}
+   215→      <div className="space-y-2">
+   216→        <Label htmlFor="api-url" className="text-xs uppercase tracking-wide text-muted-foreground">
+   217→          Booru API URL
+   218→        </Label>
+   219→        <div className="flex flex-col sm:flex-row gap-2">
+   220→          <Input
+   221→            id="api-url"
+   222→            value={apiUrl}
+   223→            onChange={(e) => setApiUrl(e.target.value)}
+   224→            placeholder="https://gelbooru.com/index.php?page=dapi&s=post&q=index&json=1"
+   225→            className="font-mono text-xs sm:text-sm flex-1"
+   226→            onKeyDown={(e) => {
+   227→              if (e.key === 'Enter' && !loading) onLoad();
+   228→            }}
+   229→          />
+   230→          <Button onClick={onLoad} disabled={loading} className="shrink-0 gap-2">
+   231→            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+   232→            {loading ? 'Loading' : 'Load'}
+   233→          </Button>
+   234→        </div>
+   235→      </div>
+   236→
+   237→      {/* preset chips */}
+   238→      <div className="flex flex-wrap items-center gap-2">
+   239→        <span className="text-xs text-muted-foreground mr-1">Presets:</span>
+   240→        {PRESET_HOSTS.map((h) => (
+   241→          <Button
+   242→            key={h.label}
+   243→            variant="outline"
+   244→            size="sm"
+   245→            className="h-7 text-xs"
+   246→            onClick={() => onPreset(h.url)}
+   247→            title={`${h.url}\n${h.note}`}
+   248→          >
+   249→            {h.label}
+   250→          </Button>
+   251→        ))}
+   252→      </div>
+   253→
+   254→      {/* filter row */}
+   255→      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 rounded-lg border border-border bg-card/50">
+   256→        {/* tags */}
+   257→        <div className="space-y-2">
+   258→          <Label htmlFor="tags" className="text-xs uppercase tracking-wide text-muted-foreground">
+   259→            Tags (optional, space-separated)
+   260→          </Label>
+   261→          <Input
+   262→            id="tags"
+   263→            value={tags}
+   264→            onChange={(e) => setTags(e.target.value)}
+   265→            placeholder="cat_ears rating:general 1girl"
+   266→            className="font-mono text-xs"
+   267→            onKeyDown={(e) => {
+   268→              if (e.key === 'Enter' && !loading) onLoad();
+   269→            }}
+   270→          />
+   271→        </div>
+   272→
+   273→        {/* limit */}
+   274→        <div className="space-y-2">
+   275→          <Label htmlFor="limit" className="text-xs uppercase tracking-wide text-muted-foreground">
+   276→            Per Page
+   277→          </Label>
+   278→          <Select value={String(limit)} onValueChange={(v) => setLimit(Number(v))}>
+   279→            <SelectTrigger id="limit" className="w-full">
+   280→              <SelectValue />
+   281→            </SelectTrigger>
+   282→            <SelectContent>
+   283→              <SelectItem value="25">25</SelectItem>
+   284→              <SelectItem value="50">50</SelectItem>
+   285→              <SelectItem value="100">100 (max for most APIs)</SelectItem>
+   286→            </SelectContent>
+   287→          </Select>
+   288→        </div>
+   289→
+   290→        {/* score slider */}
+   291→        <div className="space-y-2">
+   292→          <div className="flex items-center justify-between">
+   293→            <Label className="text-xs uppercase tracking-wide text-muted-foreground">
+   294→              Min. Score
+   295→            </Label>
+   296→            <Badge variant="secondary" className="font-mono">
+   297→              score:&gt;{scoreFloor}
+   298→            </Badge>
+   299→          </div>
+   300→          <Slider
+   301→            value={[scoreFloor]}
+   302→            onValueChange={(v) => setScoreFloor(v[0])}
+   303→            min={0}
+   304→            max={1000}
+   305→            step={5}
+   306→            className="py-1"
+   307→          />
+   308→          <div className="flex flex-wrap gap-1 pt-1">
+   309→            {[5, 50, 100, 250, 500, 1000].map((p) => (
+   310→              <Button
+   311→                key={p}
+   312→                size="sm"
+   313→                variant={scoreFloor === p ? 'default' : 'outline'}
+   314→                className="h-6 px-2 text-[10px]"
+   315→                onClick={() => setScoreFloor(p)}
+   316→              >
+   317→                {p}
+   318→              </Button>
+   319→            ))}
+   320→          </div>
+   321→        </div>
+   322→      </div>
+   323→
+   324→      {error && (
+   325→        <div className="p-3 rounded-md border border-destructive/50 bg-destructive/10 text-destructive text-sm">
+   326→          <p className="font-medium">{error.error}</p>
+   327→          {error.detail && (
+   328→            <pre className="mt-1 text-xs whitespace-pre-wrap break-all text-destructive/80">
+   329→              {error.detail}
+   330→            </pre>
+   331→          )}
+   332→        </div>
+   333→      )}
+   334→
+   335→    </section>
+   336→  );
+   337→}
+   338→
+   339→/* --------------------------- store hook --------------------------- */
+   340→/* A tiny module-level store so the page components share state without prop drilling. */
+   341→
+   342→interface BooruState {
+   343→  apiUrl: string;
+   344→  setApiUrl: (v: string) => void;
+   345→  tags: string;
+   346→  setTags: (v: string) => void;
+   347→  scoreFloor: number;
+   348→  setScoreFloor: (v: number) => void;
+   349→  limit: number;
+   350→  setLimit: (v: number) => void;
+   351→  page: number;
+   352→  setPage: (v: number) => void;
+   353→  loading: boolean;
+   354→  error: ApiError | null;
+   355→  rawResults: ApiResponse | null;
+   356→  setRawResults: (v: ApiResponse | null) => void;
+   357→  fetchImages: (pageOverride?: number) => Promise<void>;
+   358→}
+   359→
+   360→let listeners: (() => void)[] = [];
+   361→const state: {
+   362→  apiUrl: string;
+   363→  tags: string;
+   364→  scoreFloor: number;
+   365→  limit: number;
+   366→  page: number;
+   367→  loading: boolean;
+   368→  error: ApiError | null;
+   369→  rawResults: ApiResponse | null;
+   370→} = {
+   371→  apiUrl: '',
+   372→  tags: '',
+   373→  scoreFloor: 0,
+   374→  limit: 100,
+   375→  page: 0,
+   376→  loading: false,
+   377→  error: null,
+   378→  rawResults: null,
+   379→};
+   380→
+   381→function setState(patch: Partial<typeof state>) {
+   382→  Object.assign(state, patch);
+   383→  listeners.forEach((l) => l());
+   384→}
+   385→
+   386→function useSyncStore<T>(selector: () => T): T {
+   387→  const [, force] = useState(0);
+   388→  useEffect(() => {
+   389→    const l = () => force((n) => n + 1);
+   390→    listeners.push(l);
+   391→    return () => {
+   392→      listeners = listeners.filter((x) => x !== l);
+   393→    };
+   394→  }, []);
+   395→  return selector();
+   396→}
+   397→
+   398→function buildUrl(apiUrl: string, tags: string, scoreFloor: number, limit: number, page: number): string {
+   399→  const u = new URL(apiUrl);
+   400→  // Combine tags
+   401→  const userTags = tags.trim();
+   402→  const scoreTag = `score:>${scoreFloor}`;
+   403→  const existingTags = (u.searchParams.get('tags') ?? '').trim();
+   404→  const combined = [existingTags, userTags, scoreTag].filter(Boolean).join(' ');
+   405→  if (combined) u.searchParams.set('tags', combined);
+   406→  // limit
+   407→  if (!u.searchParams.has('limit')) {
+   408→    u.searchParams.set('limit', String(limit));
+   409→  } else {
+   410→    u.searchParams.set('limit', String(limit));
+   411→  }
+   412→  // pagination — different APIs use different params
+   413→  if (u.host.includes('danbooru') || u.host.includes('yande') || u.host.includes('konachan')) {
+   414→    u.searchParams.set('page', String(page + 1));
+   415→  } else {
+   416→    // Gelbooru / Safebooru / Rule34 use pid (0-based)
+   417→    u.searchParams.set('pid', String(page));
+   418→  }
+   419→  return u.toString();
+   420→}
+   421→
+   422→function useBooruStore(): BooruState {
+   423→  const apiUrl = useSyncStore(() => state.apiUrl);
+   424→  const tags = useSyncStore(() => state.tags);
+   425→  const scoreFloor = useSyncStore(() => state.scoreFloor);
+   426→  const limit = useSyncStore(() => state.limit);
+   427→  const page = useSyncStore(() => state.page);
+   428→  const loading = useSyncStore(() => state.loading);
+   429→  const error = useSyncStore(() => state.error);
+   430→  const rawResults = useSyncStore(() => state.rawResults);
+   431→
+   432→  const fetchImages = useCallback(
+   433→    async (pageOverride?: number) => {
+   434→      const effectivePage = pageOverride ?? state.page;
+   435→      const url = buildUrl(state.apiUrl, state.tags, state.scoreFloor, state.limit, effectivePage);
+   436→      setState({ loading: true, error: null });
+   437→      try {
+   438→        const res = await fetch(`/api/booru?url=${encodeURIComponent(url)}`);
+   439→        const data = await res.json();
+   440→        if (!res.ok) {
+   441→          setState({ loading: false, error: data as ApiError, rawResults: null });
+   442→          return;
+   443→        }
+   444→        setState({
+   445→          loading: false,
+   446→          rawResults: data as ApiResponse,
+   447→          page: effectivePage,
+   448→        });
+   449→      } catch (err) {
+   450→        setState({
+   451→          loading: false,
+   452→          error: {
+   453→            error: 'Network error',
+   454→            detail: err instanceof Error ? err.message : String(err),
+   455→          },
+   456→          rawResults: null,
+   457→        });
+   458→      }
+   459→    },
+   460→    []
+   461→  );
+   462→
+   463→  return {
+   464→    apiUrl,
+   465→    setApiUrl: (v) => setState({ apiUrl: v }),
+   466→    tags,
+   467→    setTags: (v) => setState({ tags: v }),
+   468→    scoreFloor,
+   469→    setScoreFloor: (v) => setState({ scoreFloor: v }),
+   470→    limit,
+   471→    setLimit: (v) => setState({ limit: v }),
+   472→    page,
+   473→    setPage: (v) => setState({ page: v }),
+   474→    loading,
+   475→    error,
+   476→    rawResults,
+   477→    setRawResults: (v) => setState({ rawResults: v }),
+   478→    fetchImages,
+   479→  };
+   480→}
+   481→
+   482→// Bridge component removed — store is consumed directly by ResultsArea and Pagination.
+   483→
+   484→/* -------------------------- results area -------------------------- */
+   485→
+   486→function ResultsArea() {
+   487→  const { loading, rawResults, error } = useBooruStore();
+   488→
+   489→  if (loading) {
+   490→    return (
+   491→      <section className="mt-8">
+   492→        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+   493→          {Array.from({ length: 15 }).map((_, i) => (
+   494→            <Skeleton key={i} className="aspect-square rounded-md" />
+   495→          ))}
+   496→        </div>
+   497→      </section>
+   498→    );
+   499→  }
+   500→
+   501→  if (error) {
+   502→    return (
+   503→      <section className="mt-8 text-center text-muted-foreground text-sm">
+   504→        Fix the error above and try again.
+   505→      </section>
+   506→    );
+   507→  }
+   508→
+   509→  if (!rawResults) {
+   510→    return (
+   511→      <section className="mt-12 text-center space-y-3">
+   512→        <div className="mx-auto h-16 w-16 rounded-full bg-muted flex items-center justify-center">
+   513→          <Search className="h-7 w-7 text-muted-foreground" />
+   514→        </div>
+   515→        <p className="text-lg font-medium">Paste a booru API URL and hit Load</p>
+   516→        <p className="text-sm text-muted-foreground max-w-md mx-auto">
+   517→          Works with Gelbooru, Danbooru, Safebooru, Rule34, yande.re, Konachan —
+   518→          any endpoint that returns the standard booru post JSON shape.
+   519→        </p>
+   520→      </section>
+   521→    );
+   522→  }
+   523→
+   524→  return <ImageGrid results={rawResults} />;
+   525→}
+   526→
+   527→/* --------------------------- image grid --------------------------- */
+   528→
+   529→function ImageGrid({ results }: { results: ApiResponse }) {
+   530→  const { posts } = results;
+   531→  const [activeIndex, setActiveIndex] = useState<number | null>(null);
+   532→
+   533→  // Close lightbox on Esc
+   534→  useEffect(() => {
+   535→    if (activeIndex === null) return;
+   536→    const onKey = (e: KeyboardEvent) => {
+   537→      if (e.key === 'Escape') setActiveIndex(null);
+   538→      if (e.key === 'ArrowRight') setActiveIndex((i) => (i === null ? i : Math.min(i + 1, posts.length - 1)));
+   539→      if (e.key === 'ArrowLeft') setActiveIndex((i) => (i === null ? i : Math.max(i - 1, 0)));
+   540→    };
+   541→    window.addEventListener('keydown', onKey);
+   542→    return () => window.removeEventListener('keydown', onKey);
+   543→  }, [activeIndex, posts.length]);
+   544→
+   545→  if (posts.length === 0) {
+   546→    return (
+   547→      <section className="mt-12 text-center text-muted-foreground text-sm">
+   548→        No posts matched this query. Try lowering the score floor or simplifying your tags.
+   549→      </section>
+   550→    );
+   551→  }
+   552→
+   553→  return (
+   554→    <section className="mt-6 space-y-4">
+   555→      <div className="flex items-center justify-between text-xs text-muted-foreground">
+   556→        <span>
+   557→          Page loaded <strong className="text-foreground">{posts.length}</strong> posts
+   558→        </span>
+   559→        <span className="truncate max-w-[60%]" title={results.source}>
+   560→          from {new URL(results.source).host}
+   561→        </span>
+   562→      </div>
+   563→
+   564→      <div className="columns-2 sm:columns-3 md:columns-4 lg:columns-5 gap-3 [column-fill:_balance]">
+   565→        {posts.map((p, i) => (
+   566→          <ImageCard
+   567→            key={`${p.id}-${i}`}
+   568→            post={p}
+   569→            onClick={() => setActiveIndex(i)}
+   570→          />
+   571→        ))}
+   572→      </div>
+   573→
+   574→      <Pagination />
+   575→
+   576→      <Lightbox
+   577→        posts={posts}
+   578→        index={activeIndex}
+   579→        onClose={() => setActiveIndex(null)}
+   580→        onNav={setActiveIndex}
+   581→      />
+   582→    </section>
+   583→  );
+   584→}
+   585→
+   586→/* --------------------------- image card --------------------------- */
+   587→
+   588→function ImageCard({ post, onClick }: { post: NormalizedPost; onClick: () => void }) {
+   589→  const [loaded, setLoaded] = useState(false);
+   590→  const [errored, setErrored] = useState(false);
+   591→
+   592→  const src = post.preview_url ?? post.sample_url ?? post.file_url;
+   593→
+   594→  if (!src || errored) {
+   595→    return (
+   596→      <button
+   597→        onClick={onClick}
+   598→        className="mb-3 break-inside-avoid w-full rounded-md border border-border bg-muted/40 flex items-center justify-center aspect-square text-xs text-muted-foreground hover:bg-muted/80 transition-colors"
+   599→      >
+   600→        Image unavailable
+   601→      </button>
+   602→    );
+   603→  }
+   604→
+   605→  return (
+   606→    <button
+   607→      onClick={onClick}
+   608→      className="mb-3 break-inside-avoid w-full rounded-md overflow-hidden border border-border bg-card hover:ring-2 hover:ring-primary/50 transition-all relative group"
+   609→    >
+   610→      <img
+   611→        src={src}
+   612→        alt={post.tags.slice(0, 5).join(', ') || `post ${post.id}`}
+   613→        loading="lazy"
+   614→        onLoad={() => setLoaded(true)}
+   615→        onError={() => setErrored(true)}
+   616→        className={`w-full h-auto block transition-opacity duration-300 ${loaded ? 'opacity-100' : 'opacity-0'}`}
+   617→      />
+   618→      {!loaded && (
+   619→        <div className="absolute inset-0 bg-muted/50 animate-pulse" />
+   620→      )}
+   621→      {/* score overlay */}
+   622→      <div className="absolute top-1.5 right-1.5 bg-black/70 text-white text-[10px] px-1.5 py-0.5 rounded font-mono">
+   623→        {post.score}
+   624→      </div>
+   625→      {/* rating badge */}
+   626→      <div className="absolute top-1.5 left-1.5 bg-black/70 text-white text-[10px] px-1.5 py-0.5 rounded uppercase">
+   627→        {post.rating}
+   628→      </div>
+   629→    </button>
+   630→  );
+   631→}
+   632→
+   633→/* ----------------------------- lightbox --------------------------- */
+   634→
+   635→function Lightbox({
+   636→  posts,
+   637→  index,
+   638→  onClose,
+   639→  onNav,
+   640→}: {
+   641→  posts: NormalizedPost[];
+   642→  index: number | null;
+   643→  onClose: () => void;
+   644→  onNav: (i: number) => void;
+   645→}) {
+   646→  const open = index !== null;
+   647→  const post = open ? posts[index] : null;
+   648→
+   649→  return (
+   650→    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+   651→      <DialogContent className="max-w-5xl w-[95vw] p-0 overflow-hidden gap-0 max-h-[90vh]">
+   652→        {post && (
+   653→          <div className="flex flex-col md:flex-row h-full max-h-[90vh]">
+   654→            {/* image area */}
+   655→            <div className="flex-1 bg-black flex items-center justify-center relative min-h-[40vh]">
+   656→              <img
+   657→                src={post.sample_url ?? post.file_url ?? post.preview_url ?? ''}
+   658→                alt={`post ${post.id}`}
+   659→                className="max-h-[90vh] max-w-full object-contain"
+   660→              />
+   661→              {/* nav arrows */}
+   662→              <button
+   663→                onClick={() => onNav(Math.max((index ?? 0) - 1, 0))}
+   664→                disabled={(index ?? 0) === 0}
+   665→                className="absolute left-2 top-1/2 -translate-y-1/2 h-10 w-10 rounded-full bg-black/50 text-white flex items-center justify-center hover:bg-black/70 disabled:opacity-30 disabled:cursor-not-allowed"
+   666→                aria-label="Previous"
+   667→              >
+   668→                <ChevronLeft className="h-5 w-5" />
+   669→              </button>
+   670→              <button
+   671→                onClick={() => onNav(Math.min((index ?? 0) + 1, posts.length - 1))}
+   672→                disabled={(index ?? 0) === posts.length - 1}
+   673→                className="absolute right-2 top-1/2 -translate-y-1/2 h-10 w-10 rounded-full bg-black/50 text-white flex items-center justify-center hover:bg-black/70 disabled:opacity-30 disabled:cursor-not-allowed"
+   674→                aria-label="Next"
+   675→              >
+   676→                <ChevronRight className="h-5 w-5" />
+   677→              </button>
+   678→            </div>
+   679→            {/* metadata */}
+   680→            <aside className="md:w-80 shrink-0 p-4 overflow-y-auto bg-background border-t md:border-t-0 md:border-l border-border max-h-[40vh] md:max-h-[90vh]">
+   681→              <DialogTitle className="text-sm font-mono mb-3">
+   682→                Post #{post.id}
+   683→              </DialogTitle>
+   684→              <dl className="space-y-2 text-xs">
+   685→                <div className="flex justify-between gap-2">
+   686→                  <dt className="text-muted-foreground">Score</dt>
+   687→                  <dd className="font-mono font-medium">{post.score}</dd>
+   688→                </div>
+   689→                <div className="flex justify-between gap-2">
+   690→                  <dt className="text-muted-foreground">Rating</dt>
+   691→                  <dd className="uppercase">{post.rating}</dd>
+   692→                </div>
+   693→                {(post.width && post.height) && (
+   694→                  <div className="flex justify-between gap-2">
+   695→                    <dt className="text-muted-foreground">Size</dt>
+   696→                    <dd className="font-mono">{post.width}×{post.height}</dd>
+   697→                  </div>
+   698→                )}
+   699→                {post.source && (
+   700→                  <div className="flex justify-between gap-2">
+   701→                    <dt className="text-muted-foreground">Source</dt>
+   702→                    <dd>
+   703→                      <a
+   704→                        href={post.source}
+   705→                        target="_blank"
+   706→                        rel="noopener noreferrer"
+   707→                        className="text-primary hover:underline inline-flex items-center gap-1 truncate max-w-[180px]"
+   708→                      >
+   709→                        link <ExternalLink className="h-3 w-3 shrink-0" />
+   710→                      </a>
+   711→                    </dd>
+   712→                  </div>
+   713→                )}
+   714→                {post.file_url && (
+   715→                  <div className="flex justify-between gap-2">
+   716→                    <dt className="text-muted-foreground">File</dt>
+   717→                    <dd>
+   718→                      <a
+   719→                        href={post.file_url}
+   720→                        target="_blank"
+   721→                        rel="noopener noreferrer"
+   722→                        className="text-primary hover:underline inline-flex items-center gap-1 truncate max-w-[180px]"
+   723→                      >
+   724→                        open <ExternalLink className="h-3 w-3 shrink-0" />
+   725→                      </a>
+   726→                    </dd>
+   727→                  </div>
+   728→                )}
+   729→              </dl>
+   730→              <div className="mt-4">
+   731→                <p className="text-xs uppercase tracking-wide text-muted-foreground mb-2">
+   732→                  Tags ({post.tags.length})
+   733→                </p>
+   734→                <div className="flex flex-wrap gap-1">
+   735→                  {post.tags.slice(0, 60).map((t, i) => (
+   736→                    <Badge key={`${t}-${i}`} variant="secondary" className="text-[10px] font-mono">
+   737→                      {t}
+   738→                    </Badge>
+   739→                  ))}
+   740→                  {post.tags.length > 60 && (
+   741→                    <span className="text-[10px] text-muted-foreground">
+   742→                      +{post.tags.length - 60} more
+   743→                    </span>
+   744→                  )}
+   745→                </div>
+   746→              </div>
+   747→            </aside>
+   748→          </div>
+   749→        )}
+   750→      </DialogContent>
+   751→    </Dialog>
+   752→  );
+   753→}
+   754→
+   755→/* --------------------------- pagination --------------------------- */
+   756→
+   757→function Pagination() {
+   758→  const { page, setPage, fetchImages, loading, rawResults } = useBooruStore();
+   759→  const full = rawResults?.posts.length ?? 0;
+   760→  const canPrev = page > 0;
+   761→  const canNext = !loading && full > 0;
+   762→
+   763→  const go = (p: number) => {
+   764→    if (p < 0) return;
+   765→    setPage(p);
+   766→    fetchImages(p);
+   767→    if (typeof window !== 'undefined') {
+   768→      window.scrollTo({ top: 0, behavior: 'smooth' });
+   769→    }
+   770→  };
+   771→
+   772→  return (
+   773→    <div className="flex items-center justify-between gap-2 pt-4 border-t border-border">
+   774→      <Button
+   775→        variant="outline"
+   776→        size="sm"
+   777→        onClick={() => go(page - 1)}
+   778→        disabled={!canPrev || loading}
+   779→        className="gap-1"
+   780→      >
+   781→        <ChevronLeft className="h-4 w-4" />
+   782→        Prev
+   783→      </Button>
+   784→      <span className="text-xs text-muted-foreground font-mono">
+   785→        Page {page + 1}
+   786→      </span>
+   787→      <Button
+   788→        variant="outline"
+   789→        size="sm"
+   790→        onClick={() => go(page + 1)}
+   791→        disabled={!canNext || loading}
+   792→        className="gap-1"
+   793→      >
+   794→        Next
+   795→        <ChevronRight className="h-4 w-4" />
+   796→      </Button>
+   797→    </div>
+   798→  );
+   799→}
+   800→
+   801→/* ----------------------------- footer ----------------------------- */
+   802→
+   803→function Footer() {
+   804→  return (
+   805→    <footer className="mt-auto border-t border-border bg-background/80 backdrop-blur">
+   806→      <div className="container mx-auto max-w-7xl px-4 py-3 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-muted-foreground">
+   807→        <p>
+   808→          A booru-API image viewer. Be respectful of each site&apos;s rate limits and ToS.
+   809→        </p>
+   810→        <p className="font-mono">client-side proxy · Next.js 16</p>
+   811→      </div>
+   812→    </footer>
+   813→  );
+   814→}
+   815→
