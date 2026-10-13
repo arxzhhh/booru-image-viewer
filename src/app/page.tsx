@@ -239,12 +239,21 @@ function isHotlinkProtected(url: string): boolean {
 }
 
 /** Route a media URL through the server-side image proxy if needed. */
-function proxyMediaUrl(url: string | null): string | null {
-  if (!url) return null;
+function proxyMediaUrl(url: string | null | undefined): string | null {
+  if (!url || url.trim() === '') return null;
   if (isHotlinkProtected(url)) {
     return `/api/image?url=${encodeURIComponent(url)}`;
   }
   return url;
+}
+
+/** Pick the first non-empty URL from a list, then proxy it. */
+function pickMediaUrl(...urls: (string | null | undefined)[]): string | null {
+  for (const u of urls) {
+    const proxied = proxyMediaUrl(u);
+    if (proxied) return proxied;
+  }
+  return null;
 }
 
 function dedupePosts(posts: NormalizedPost[]): NormalizedPost[] {
@@ -1791,8 +1800,10 @@ function ImageCard({
 
   const isVideo = isVideoPost(post);
   const isGif = isGifPost(post);
-  const thumbSrc = proxyMediaUrl(
-    post.preview_url ?? post.sample_url ?? post.file_url
+  const thumbSrc = pickMediaUrl(
+    post.preview_url,
+    post.sample_url,
+    post.file_url
   );
 
   if (!thumbSrc || errored) {
@@ -1870,6 +1881,7 @@ function Lightbox({
   const videoRef = useRef<HTMLVideoElement>(null);
 
   const isVideo = post ? isVideoPost(post) : false;
+  const isGif = post ? isGifPost(post) : false;
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
@@ -1882,7 +1894,7 @@ function Lightbox({
                 <div className="relative w-full h-full flex items-center justify-center">
                   <video
                     ref={videoRef}
-                    src={proxyMediaUrl(post.file_url ?? post.sample_url) ?? ''}
+                    src={pickMediaUrl(post.file_url, post.sample_url) ?? ''}
                     controls
                     autoPlay
                     loop
@@ -1900,7 +1912,7 @@ function Lightbox({
                 </div>
               ) : (
                 <img
-                  src={proxyMediaUrl(post.sample_url ?? post.file_url ?? post.preview_url) ?? ''}
+                  src={pickMediaUrl(post.sample_url, post.file_url, post.preview_url) ?? ''}
                   alt={`post ${post.id}`}
                   className="max-h-[90vh] max-w-full object-contain"
                 />
@@ -1933,12 +1945,19 @@ function Lightbox({
                 <DialogTitle className="text-sm font-mono">
                   Post #{post.id}
                 </DialogTitle>
-                {isVideo && (
-                  <Badge variant="secondary" className="text-[10px] gap-1">
-                    <Play className="h-3 w-3 fill-current" />
-                    VIDEO
-                  </Badge>
-                )}
+                <div className="flex items-center gap-1">
+                  {isGif && (
+                    <Badge variant="secondary" className="text-[10px] font-mono font-bold bg-purple-600/20 text-purple-600">
+                      GIF
+                    </Badge>
+                  )}
+                  {isVideo && (
+                    <Badge variant="secondary" className="text-[10px] gap-1">
+                      <Play className="h-3 w-3 fill-current" />
+                      VIDEO
+                    </Badge>
+                  )}
+                </div>
               </div>
               <dl className="space-y-2 text-xs">
                 <div className="flex justify-between gap-2">
