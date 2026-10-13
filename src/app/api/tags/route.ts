@@ -92,10 +92,29 @@ async function fetchDanbooruTags(
   host: string,
   term: string
 ): Promise<TagSuggestion[]> {
-  // Danbooru / yande.re / Konachan — Danbooru autocomplete endpoint
+  // Danbooru / yande.re / Konachan / e621 — autocomplete endpoints
   let base = 'https://danbooru.donmai.us';
   if (host.includes('yande')) base = 'https://yande.re';
   if (host.includes('konachan')) base = 'https://konachan.com';
+  if (host.includes('e621')) base = 'https://e621.net';
+
+  // e621 has its own tag search endpoint
+  if (host.includes('e621')) {
+    const u = new URL(`${base}/tags.json`);
+    u.searchParams.set('search[name_matches]', `${term}*`);
+    u.searchParams.set('limit', '10');
+    u.searchParams.set('search[order]', 'count');
+    const res = await fetch(u.toString(), {
+      headers: { 'User-Agent': 'BooruImageViewer/1.0 (by user)' },
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!res.ok) return [];
+    const data = (await res.json()) as Array<{
+      name: string;
+      post_count: number;
+    }>;
+    return data.map((t) => ({ name: t.name, count: t.post_count ?? 0 }));
+  }
 
   if (host.includes('yande') || host.includes('konachan')) {
     // Use the tag.json endpoint with name pattern
@@ -163,7 +182,8 @@ export async function GET(req: NextRequest) {
     } else if (
       host.includes('danbooru') ||
       host.includes('yande') ||
-      host.includes('konachan')
+      host.includes('konachan') ||
+      host.includes('e621')
     ) {
       suggestions = await fetchDanbooruTags(host, term);
     }

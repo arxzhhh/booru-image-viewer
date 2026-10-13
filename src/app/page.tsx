@@ -53,8 +53,6 @@ import {
   Trash2,
   X,
   ClipboardPaste,
-  Star,
-  Heart,
 } from 'lucide-react';
 import { useTheme } from 'next-themes';
 import { useMounted } from '@/hooks/use-mounted';
@@ -88,7 +86,6 @@ interface ApiError {
 
 type ViewMode = 'pagination' | 'infinite';
 type SortMode = 'default' | 'score_desc' | 'score_asc';
-type TabView = 'search' | 'favorites';
 
 interface BookmarkEntry {
   name: string;
@@ -122,7 +119,7 @@ const PRESET_HOSTS: { label: string; url: string; note: string }[] = [
   {
     label: 'Rule34',
     url: 'https://api.rule34.xxx/index.php?page=dapi&s=post&q=index&json=1',
-    note: 'requires API key + user_id (get one at rule34.xxx account options)',
+    note: 'supports api_key + user_id',
   },
   {
     label: 'yande.re',
@@ -134,13 +131,17 @@ const PRESET_HOSTS: { label: string; url: string; note: string }[] = [
     url: 'https://konachan.com/post.json?limit=100',
     note: 'login + api_key for auth',
   },
+  {
+    label: 'e621',
+    url: 'https://e621.net/posts.json?limit=100',
+    note: 'login + api_key for auth',
+  },
 ];
 
 const VIDEO_EXTS = ['webm', 'mp4', 'm4v', 'mov', 'mkv', 'ogv'];
+const GIF_EXTS = ['gif'];
 const SESSION_KEY = 'booru-viewer-session';
 const BOOKMARKS_KEY = 'booru-viewer-bookmarks';
-const FAVORITES_KEY = 'booru-viewer-favorites';
-const HOST_CREDS_KEY = 'booru-viewer-host-creds';
 
 /* ------------------------- helper funcs --------------------------- */
 
@@ -161,6 +162,11 @@ function extractExt(url: string | null): string | null {
 function isVideoPost(post: NormalizedPost): boolean {
   const ext = (post.file_ext ?? extractExt(post.file_url) ?? '').toLowerCase();
   return VIDEO_EXTS.includes(ext);
+}
+
+function isGifPost(post: NormalizedPost): boolean {
+  const ext = (post.file_ext ?? extractExt(post.file_url) ?? '').toLowerCase();
+  return GIF_EXTS.includes(ext);
 }
 
 /**
@@ -220,6 +226,7 @@ const HOTLINK_DOMAINS = [
   'yande.re',
   'konachan.com',
   'konachan.net',
+  'e621.net',
 ];
 
 function isHotlinkProtected(url: string): boolean {
@@ -271,7 +278,12 @@ function requestVideoFullscreen(video: HTMLVideoElement | null) {
 function detectAuthScheme(apiUrl: string): 'gelbooru' | 'danbooru' | 'none' {
   try {
     const host = new URL(apiUrl).host;
-    if (host.includes('danbooru') || host.includes('yande') || host.includes('konachan')) {
+    if (
+      host.includes('danbooru') ||
+      host.includes('yande') ||
+      host.includes('konachan') ||
+      host.includes('e621')
+    ) {
       return 'danbooru';
     }
     if (host.includes('gelbooru') || host.includes('safebooru') || host.includes('rule34')) {
@@ -339,7 +351,12 @@ function buildUrl(
   }
 
   // Pagination — different APIs use different params
-  if (host.includes('danbooru') || host.includes('yande') || host.includes('konachan')) {
+  if (
+    host.includes('danbooru') ||
+    host.includes('yande') ||
+    host.includes('konachan') ||
+    host.includes('e621')
+  ) {
     u.searchParams.set('page', String(page + 1));
   } else {
     u.searchParams.set('pid', String(page));
@@ -400,85 +417,6 @@ function saveBookmarks(bm: BookmarkEntry[]) {
   }
 }
 
-function loadFavorites(): NormalizedPost[] {
-  if (typeof window === 'undefined') return [];
-  try {
-    const raw = window.localStorage.getItem(FAVORITES_KEY);
-    if (!raw) return [];
-    return JSON.parse(raw) as NormalizedPost[];
-  } catch {
-    return [];
-  }
-}
-
-function saveFavorites(favs: NormalizedPost[]) {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(FAVORITES_KEY, JSON.stringify(favs));
-  } catch {
-    // ignore quota errors
-  }
-}
-
-/**
- * Per-host credential storage.
- * Stores { [host]: { apiKey, userId } } so each booru remembers its own key.
- * Keyed by the host pattern used by detectAuthScheme (e.g. "gelbooru", "rule34", "danbooru").
- */
-interface HostCreds {
-  apiKey: string;
-  userId: string;
-}
-
-function getHostKey(apiUrl: string): string {
-  // Use the actual host (not just the scheme) so Gelbooru and Rule34
-  // get separate credential slots even though both are 'gelbooru' scheme.
-  try {
-    const host = new URL(apiUrl).host;
-    // Normalize: strip subdomains like "api." or "img4." for matching
-    if (host.includes('gelbooru')) return 'gelbooru.com';
-    if (host.includes('safebooru')) return 'safebooru.org';
-    if (host.includes('rule34')) return 'rule34.xxx';
-    if (host.includes('danbooru')) return 'danbooru.donmai.us';
-    if (host.includes('yande')) return 'yande.re';
-    if (host.includes('konachan')) return 'konachan.com';
-    return host;
-  } catch {
-    return 'none';
-  }
-}
-
-function loadHostCreds(): Record<string, HostCreds> {
-  if (typeof window === 'undefined') return {};
-  try {
-    const raw = window.localStorage.getItem(HOST_CREDS_KEY);
-    if (!raw) return {};
-    return JSON.parse(raw) as Record<string, HostCreds>;
-  } catch {
-    return {};
-  }
-}
-
-function loadCredsForHost(apiUrl: string): HostCreds {
-  const key = getHostKey(apiUrl);
-  if (key === 'none') return { apiKey: '', userId: '' };
-  const all = loadHostCreds();
-  return all[key] ?? { apiKey: '', userId: '' };
-}
-
-function saveCredsForHost(apiUrl: string, apiKey: string, userId: string) {
-  const key = getHostKey(apiUrl);
-  if (key === 'none') return;
-  const all = loadHostCreds();
-  all[key] = { apiKey, userId };
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(HOST_CREDS_KEY, JSON.stringify(all));
-  } catch {
-    // ignore
-  }
-}
-
 /* ----------------------- module-level store ----------------------- */
 
 interface StoreState {
@@ -490,7 +428,6 @@ interface StoreState {
   userId: string;
   viewMode: ViewMode;
   sortMode: SortMode;
-  tabView: TabView;
   page: number;
   loading: boolean;
   error: ApiError | null;
@@ -498,7 +435,6 @@ interface StoreState {
   accumulatedPosts: NormalizedPost[];
   hasMore: boolean;
   bookmarks: BookmarkEntry[];
-  favorites: NormalizedPost[];
   sessionLoaded: boolean;
 }
 
@@ -511,7 +447,6 @@ const storeState: StoreState = {
   userId: '',
   viewMode: 'pagination',
   sortMode: 'default',
-  tabView: 'search',
   page: 0,
   loading: false,
   error: null,
@@ -519,7 +454,6 @@ const storeState: StoreState = {
   accumulatedPosts: [],
   hasMore: true,
   bookmarks: [],
-  favorites: [],
   sessionLoaded: false,
 };
 
@@ -558,8 +492,6 @@ function useBooruStore() {
   const accumulatedPosts = useSyncStore(() => storeState.accumulatedPosts);
   const hasMore = useSyncStore(() => storeState.hasMore);
   const bookmarks = useSyncStore(() => storeState.bookmarks);
-  const favorites = useSyncStore(() => storeState.favorites);
-  const tabView = useSyncStore(() => storeState.tabView);
   const sessionLoaded = useSyncStore(() => storeState.sessionLoaded);
 
   const fetchImages = useCallback(async (pageOverride?: number) => {
@@ -621,21 +553,7 @@ function useBooruStore() {
     }
   }, []);
 
-  const setApiUrl = useCallback((v: string) => {
-    // When the API URL's host changes, auto-load credentials saved for that host.
-    const newHost = getHostKey(v);
-    const currentHost = getHostKey(storeState.apiUrl);
-    if (newHost !== currentHost && newHost !== 'none') {
-      const saved = loadCredsForHost(v);
-      updateState({
-        apiUrl: v,
-        apiKey: saved.apiKey,
-        userId: saved.userId,
-      });
-    } else {
-      updateState({ apiUrl: v });
-    }
-  }, []);
+  const setApiUrl = useCallback((v: string) => updateState({ apiUrl: v }), []);
   const setTags = useCallback((v: string) => updateState({ tags: v }), []);
   const setScoreFloor = useCallback(
     (v: number) => updateState({ scoreFloor: v }),
@@ -663,31 +581,6 @@ function useBooruStore() {
   );
   const setBookmarks = useCallback(
     (v: BookmarkEntry[]) => updateState({ bookmarks: v }),
-    []
-  );
-  const setTabView = useCallback(
-    (v: TabView) => updateState({ tabView: v }),
-    []
-  );
-  const toggleFavorite = useCallback((post: NormalizedPost) => {
-    const existing = storeState.favorites;
-    const isFav = existing.some((f) => String(f.id) === String(post.id));
-    const next = isFav
-      ? existing.filter((f) => String(f.id) !== String(post.id))
-      : [post, ...existing];
-    updateState({ favorites: next });
-    saveFavorites(next);
-  }, []);
-  const removeFavorite = useCallback((postId: string | number) => {
-    const next = storeState.favorites.filter(
-      (f) => String(f.id) !== String(postId)
-    );
-    updateState({ favorites: next });
-    saveFavorites(next);
-  }, []);
-  const isFavorite = useCallback(
-    (postId: string | number) =>
-      storeState.favorites.some((f) => String(f.id) === String(postId)),
     []
   );
 
@@ -718,12 +611,6 @@ function useBooruStore() {
     hasMore,
     bookmarks,
     setBookmarks,
-    favorites,
-    toggleFavorite,
-    removeFavorite,
-    isFavorite,
-    tabView,
-    setTabView,
     sessionLoaded,
     fetchImages,
   };
@@ -751,7 +638,7 @@ function useHydrateStore() {
     } else {
       updateState({ sessionLoaded: true });
     }
-    updateState({ bookmarks: loadBookmarks(), favorites: loadFavorites() });
+    updateState({ bookmarks: loadBookmarks() });
   }, []);
 }
 
@@ -785,16 +672,6 @@ function useAutoSaveSession() {
     sortMode,
     sessionLoaded,
   ]);
-
-  // Auto-save credentials per-host whenever they change
-  useEffect(() => {
-    if (!sessionLoaded) return;
-    if (!apiUrl || !apiKey) return;
-    const timer = setTimeout(() => {
-      saveCredsForHost(apiUrl, apiKey, userId);
-    }, 600);
-    return () => clearTimeout(timer);
-  }, [apiUrl, apiKey, userId, sessionLoaded]);
 }
 
 /* ----------------------------- main ------------------------------- */
@@ -802,62 +679,17 @@ function useAutoSaveSession() {
 export default function Home() {
   useHydrateStore();
   useAutoSaveSession();
-  const { tabView } = useBooruStore();
 
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground">
       <Header />
       <DeployBanner />
       <main className="flex-1 container mx-auto px-4 py-6 max-w-7xl w-full">
-        <TabBar />
-        {tabView === 'search' ? (
-          <>
-            <ControlPanel />
-            <ResultsArea />
-          </>
-        ) : (
-          <FavoritesView />
-        )}
+        <ControlPanel />
+        <ResultsArea />
       </main>
       <Footer />
       <Toaster />
-    </div>
-  );
-}
-
-/* ----------------------------- tab bar ---------------------------- */
-
-function TabBar() {
-  const { tabView, setTabView, favorites } = useBooruStore();
-  return (
-    <div className="flex items-center gap-1 mb-6 p-1 bg-muted/50 rounded-lg w-fit">
-      <button
-        onClick={() => setTabView('search')}
-        className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all flex items-center gap-1.5 ${
-          tabView === 'search'
-            ? 'bg-background text-foreground shadow-sm'
-            : 'text-muted-foreground hover:text-foreground'
-        }`}
-      >
-        <Search className="h-3.5 w-3.5" />
-        Search
-      </button>
-      <button
-        onClick={() => setTabView('favorites')}
-        className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all flex items-center gap-1.5 ${
-          tabView === 'favorites'
-            ? 'bg-background text-foreground shadow-sm'
-            : 'text-muted-foreground hover:text-foreground'
-        }`}
-      >
-        <Heart className={`h-3.5 w-3.5 ${tabView === 'favorites' ? 'fill-red-500 text-red-500' : ''}`} />
-        Favorites
-        {favorites.length > 0 && (
-          <Badge variant="secondary" className="text-[10px] h-4 px-1.5">
-            {favorites.length}
-          </Badge>
-        )}
-      </button>
     </div>
   );
 }
@@ -920,25 +752,20 @@ function Header() {
   const mounted = useMounted();
 
   return (
-    <header className="sticky top-0 z-30 border-b border-border bg-background/80 backdrop-blur-xl">
-      <div className="container mx-auto max-w-7xl px-4 h-16 flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
-          <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center shadow-sm">
+    <header className="sticky top-0 z-30 border-b border-border bg-background/80 backdrop-blur">
+      <div className="container mx-auto max-w-7xl px-4 h-14 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <div className="h-7 w-7 rounded bg-primary flex items-center justify-center">
             <span className="text-primary-foreground font-bold text-sm">B</span>
           </div>
-          <div className="flex flex-col">
-            <h1 className="text-base sm:text-lg font-semibold tracking-tight leading-none">
-              Booru Image Viewer
-            </h1>
-            <span className="text-[10px] text-muted-foreground hidden sm:block mt-0.5">
-              Browse images from any booru API
-            </span>
-          </div>
+          <h1 className="text-base sm:text-lg font-semibold tracking-tight">
+            Booru Image Viewer
+          </h1>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-2">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="sm" className="gap-1.5 h-9">
+              <Button variant="ghost" size="sm" className="gap-1">
                 <Info className="h-4 w-4" />
                 <span className="hidden sm:inline">Help</span>
               </Button>
@@ -948,14 +775,13 @@ function Header() {
                 <p className="font-medium text-foreground text-sm">How to use</p>
                 <ol className="list-decimal pl-4 space-y-1">
                   <li>Paste a booru JSON API URL (or click a preset).</li>
-                  <li>Enter your API key + user ID in Credentials (needed for Gelbooru & Rule34).</li>
+                  <li>Enter your API key + user ID in Credentials (needed for Gelbooru).</li>
                   <li>Add optional tags, pick a min. score.</li>
                   <li>Choose Pagination or Infinite Scroll.</li>
                   <li>Click <strong>Load</strong>. Click any thumbnail to open the lightbox.</li>
                 </ol>
                 <p className="pt-1">
-                  Keys are remembered per-site — enter once and they auto-load
-                  when you switch back. For Gelbooru, get a free API key at:{' '}
+                  For Gelbooru, get a free API key at:{' '}
                   <a
                     href="https://gelbooru.com/index.php?page=account&s=options"
                     target="_blank"
@@ -971,7 +797,6 @@ function Header() {
           <Button
             variant="ghost"
             size="icon"
-            className="h-9 w-9"
             aria-label="Toggle theme"
             onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
           >
@@ -1056,7 +881,7 @@ function ControlPanel() {
               if (e.key === 'Enter' && !loading) onLoad();
             }}
           />
-          <Button onClick={onLoad} disabled={loading} className="shrink-0 gap-2 h-10 px-6">
+          <Button onClick={onLoad} disabled={loading} className="shrink-0 gap-2">
             {loading ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
@@ -1069,16 +894,14 @@ function ControlPanel() {
 
       {/* Preset chips + view mode toggle */}
       <div className="flex flex-wrap items-center gap-2 justify-between">
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium mr-1">
-            Sources
-          </span>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-muted-foreground mr-1">Presets:</span>
           {PRESET_HOSTS.map((h) => (
             <Button
               key={h.label}
               variant="outline"
               size="sm"
-              className="h-7 text-xs rounded-full px-3 hover:bg-primary/5"
+              className="h-7 text-xs"
               onClick={() => onPreset(h.url)}
               title={`${h.url}\n${h.note}`}
             >
@@ -1098,7 +921,7 @@ function ControlPanel() {
       />
 
       {/* Filter row */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-5 rounded-xl border border-border bg-card/50 shadow-sm">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 rounded-lg border border-border bg-card/50">
         {/* tags with autocomplete */}
         <TagInputWithAutocomplete
           tags={tags}
@@ -1250,7 +1073,6 @@ function TagInputWithAutocomplete({
   const [activeSuggestion, setActiveSuggestion] = useState(-1);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Extract the word currently being typed (last token after a space)
@@ -1367,24 +1189,10 @@ function TagInputWithAutocomplete({
     }
   };
 
-  // Click-outside listener — closes the suggestion dropdown when clicking
-  // anywhere outside the input container. This is more reliable than the
-  // old onBlur+setTimeout approach which could fire before a suggestion
-  // click registered on desktop.
-  useEffect(() => {
-    if (!showSuggestions) return;
-    const onClickOutside = (e: MouseEvent) => {
-      if (
-        containerRef.current &&
-        !containerRef.current.contains(e.target as Node)
-      ) {
-        setShowSuggestions(false);
-      }
-    };
-    // Use mousedown so it fires before blur/click on the input
-    document.addEventListener('mousedown', onClickOutside);
-    return () => document.removeEventListener('mousedown', onClickOutside);
-  }, [showSuggestions]);
+  const onBlur = () => {
+    // Delay to allow click on suggestion
+    setTimeout(() => setShowSuggestions(false), 150);
+  };
 
   const onFocus = () => {
     if (suggestions.length > 0 && currentWord.length >= 2) {
@@ -1399,7 +1207,7 @@ function TagInputWithAutocomplete({
   };
 
   return (
-    <div ref={containerRef} className="space-y-2 relative">
+    <div className="space-y-2 relative">
       <Label
         htmlFor="tags"
         className="text-xs uppercase tracking-wide text-muted-foreground"
@@ -1414,6 +1222,7 @@ function TagInputWithAutocomplete({
           value={tags}
           onChange={onChange}
           onKeyDown={onKeyDown}
+          onBlur={onBlur}
           onFocus={onFocus}
           placeholder="cat_ears rating:general 1girl"
           className="font-mono text-xs flex h-9 w-full min-w-0 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
@@ -1423,36 +1232,31 @@ function TagInputWithAutocomplete({
         {loadingSuggestions && (
           <Loader2 className="absolute right-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 animate-spin text-muted-foreground" />
         )}
-
-        {showSuggestions && suggestions.length > 0 && (
-          <div className="absolute z-50 left-0 right-0 top-full mt-1 rounded-md border border-border bg-popover shadow-md max-h-72 overflow-y-auto">
-            {suggestions.map((s, i) => (
-              <button
-                key={s.name}
-                type="button"
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  applySuggestion(s);
-                }}
-                onClick={(e) => {
-                  e.preventDefault();
-                  applySuggestion(s);
-                }}
-                onMouseEnter={() => setActiveSuggestion(i)}
-                className={`w-full flex items-center justify-between gap-2 px-3 py-1.5 text-xs hover:bg-accent ${
-                  i === activeSuggestion ? 'bg-accent' : ''
-                }`}
-              >
-                <span className="font-mono truncate">{s.name}</span>
-                <Badge variant="secondary" className="text-[10px] shrink-0">
-                  {formatCount(s.count)}
-                </Badge>
-              </button>
-            ))}
-          </div>
-        )}
       </div>
+
+      {showSuggestions && suggestions.length > 0 && (
+        <div className="absolute z-50 left-0 right-0 mt-1 rounded-md border border-border bg-popover shadow-md max-h-72 overflow-y-auto">
+          {suggestions.map((s, i) => (
+            <button
+              key={s.name}
+              type="button"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                applySuggestion(s);
+              }}
+              onMouseEnter={() => setActiveSuggestion(i)}
+              className={`w-full flex items-center justify-between gap-2 px-3 py-1.5 text-xs hover:bg-accent ${
+                i === activeSuggestion ? 'bg-accent' : ''
+              }`}
+            >
+              <span className="font-mono truncate">{s.name}</span>
+              <Badge variant="secondary" className="text-[10px] shrink-0">
+                {formatCount(s.count)}
+              </Badge>
+            </button>
+          ))}
+        </div>
+      )}
       <p className="text-[11px] text-muted-foreground">
         Type a tag to see suggestions with post counts. Use ↑↓ to navigate,
         Tab or Enter to insert.
@@ -1502,21 +1306,12 @@ function CredentialsSection({
     }
     if (parsed.apiKey) setApiKey(parsed.apiKey);
     if (parsed.userId) setUserId(parsed.userId);
-    // Immediately save per-host so switching back to this booru remembers the key
-    if (parsed.apiKey && apiUrl) {
-      saveCredsForHost(apiUrl, parsed.apiKey, parsed.userId || userId);
-    }
     setPasteOpen(false);
     setPasteText('');
     if (pasteRef.current) pasteRef.current.value = '';
-    const hostLabel = detectAuthScheme(apiUrl) === 'gelbooru'
-      ? 'this Gelbooru-family site'
-      : detectAuthScheme(apiUrl) === 'danbooru'
-        ? 'this Danbooru-family site'
-        : 'this site';
     toast({
-      title: 'Credentials saved',
-      description: `Remembered for ${hostLabel}. You won't need to enter them again.`,
+      title: 'Credentials parsed',
+      description: `API Key: ${parsed.apiKey ? parsed.apiKey.slice(0, 8) + '...' : '(none)'}, User ID: ${parsed.userId || '(none)'}`,
     });
   };
 
@@ -1589,10 +1384,9 @@ function CredentialsSection({
             </div>
           </div>
           <p className="text-[11px] text-muted-foreground">
-            Keys are remembered per-site (Gelbooru, Rule34, Danbooru, etc.) in
-            your browser&apos;s localStorage — enter them once and they&apos;ll
-            auto-load when you switch back to that site. They&apos;re sent only
-            to the booru API via the server proxy and never logged.
+            Keys are stored only in your browser&apos;s localStorage and sent
+            directly to the booru API via the server proxy. They are never
+            logged.
           </p>
         </div>
       </CollapsibleContent>
@@ -1863,20 +1657,17 @@ function ResultsArea() {
 
   if (!rawResults && accumulatedPosts.length === 0) {
     return (
-      <section className="mt-16 text-center space-y-4">
-        <div className="mx-auto h-20 w-20 rounded-2xl bg-gradient-to-br from-muted to-muted/50 flex items-center justify-center shadow-sm">
-          <Search className="h-9 w-9 text-muted-foreground" />
+      <section className="mt-12 text-center space-y-3">
+        <div className="mx-auto h-16 w-16 rounded-full bg-muted flex items-center justify-center">
+          <Search className="h-7 w-7 text-muted-foreground" />
         </div>
-        <div className="space-y-2">
-          <p className="text-xl font-semibold tracking-tight">
-            Start browsing
-          </p>
-          <p className="text-sm text-muted-foreground max-w-md mx-auto">
-            Pick a source above, paste your API key in Credentials if needed,
-            then hit Load. Works with Gelbooru, Danbooru, Safebooru, Rule34,
-            yande.re, and Konachan.
-          </p>
-        </div>
+        <p className="text-lg font-medium">
+          Paste a booru API URL and hit Load
+        </p>
+        <p className="text-sm text-muted-foreground max-w-md mx-auto">
+          Works with Gelbooru, Danbooru, Safebooru, Rule34, yande.re, Konachan.
+          Add your API key in Credentials if you get a 401.
+        </p>
       </section>
     );
   }
@@ -1991,46 +1782,34 @@ function ImageGrid() {
 function ImageCard({
   post,
   onClick,
-  showFavoriteButton = true,
 }: {
   post: NormalizedPost;
   onClick: () => void;
-  showFavoriteButton?: boolean;
 }) {
   const [loaded, setLoaded] = useState(false);
   const [errored, setErrored] = useState(false);
-  const { toggleFavorite, isFavorite } = useBooruStore();
-  const fav = isFavorite(post.id);
 
   const isVideo = isVideoPost(post);
+  const isGif = isGifPost(post);
   const thumbSrc = proxyMediaUrl(
     post.preview_url ?? post.sample_url ?? post.file_url
   );
 
-  const onFavClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    e.preventDefault();
-    toggleFavorite(post);
-  };
-
   if (!thumbSrc || errored) {
     return (
-      <div
+      <button
         onClick={onClick}
-        className="mb-3 break-inside-avoid w-full rounded-md border border-border bg-muted/40 flex items-center justify-center aspect-square text-xs text-muted-foreground hover:bg-muted/80 transition-colors relative cursor-pointer"
+        className="mb-3 break-inside-avoid w-full rounded-md border border-border bg-muted/40 flex items-center justify-center aspect-square text-xs text-muted-foreground hover:bg-muted/80 transition-colors"
       >
-        {isVideo ? 'Video unavailable' : 'Image unavailable'}
-        {showFavoriteButton && (
-          <FavoriteStar fav={fav} onClick={onFavClick} />
-        )}
-      </div>
+        {isVideo ? 'Video unavailable' : isGif ? 'GIF unavailable' : 'Image unavailable'}
+      </button>
     );
   }
 
   return (
-    <div
+    <button
       onClick={onClick}
-      className="mb-3 break-inside-avoid w-full rounded-xl overflow-hidden border border-border bg-card hover:ring-2 hover:ring-primary/50 hover:border-primary/30 hover:shadow-lg transition-all duration-200 relative group cursor-pointer"
+      className="mb-3 break-inside-avoid w-full rounded-md overflow-hidden border border-border bg-card hover:ring-2 hover:ring-primary/50 transition-all relative group"
     >
       <img
         src={thumbSrc}
@@ -2054,9 +1833,11 @@ function ImageCard({
         {post.rating}
       </div>
 
-      {/* favorite button */}
-      {showFavoriteButton && (
-        <FavoriteStar fav={fav} onClick={onFavClick} />
+      {/* GIF badge */}
+      {isGif && (
+        <div className="absolute bottom-1.5 left-1.5 bg-purple-600/90 text-white text-[10px] px-1.5 py-0.5 rounded font-mono font-bold">
+          GIF
+        </div>
       )}
 
       {/* video indicator */}
@@ -2067,32 +1848,6 @@ function ImageCard({
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-/* ------------------------- favorite star -------------------------- */
-
-function FavoriteStar({
-  fav,
-  onClick,
-}: {
-  fav: boolean;
-  onClick: (e: React.MouseEvent) => void;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      aria-label={fav ? 'Remove from favorites' : 'Add to favorites'}
-      className={`absolute bottom-1.5 right-1.5 h-8 w-8 rounded-full flex items-center justify-center transition-all ${
-        fav
-          ? 'bg-red-500/90 text-white opacity-100'
-          : 'bg-black/60 text-white opacity-0 group-hover:opacity-100 hover:bg-black/80'
-      }`}
-    >
-      <Heart
-        className={`h-4 w-4 ${fav ? 'fill-white' : ''}`}
-      />
     </button>
   );
 }
@@ -2113,10 +1868,8 @@ function Lightbox({
   const open = index !== null;
   const post = open ? posts[index] : null;
   const videoRef = useRef<HTMLVideoElement>(null);
-  const { toggleFavorite, isFavorite } = useBooruStore();
 
   const isVideo = post ? isVideoPost(post) : false;
-  const fav = post ? isFavorite(post.id) : false;
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
@@ -2176,27 +1929,16 @@ function Lightbox({
 
             {/* metadata */}
             <aside className="md:w-80 shrink-0 p-4 overflow-y-auto bg-background border-t md:border-t-0 md:border-l border-border max-h-[40vh] md:max-h-[90vh]">
-              <div className="flex items-center justify-between mb-3 gap-2">
-                <DialogTitle className="text-sm font-mono truncate">
+              <div className="flex items-center justify-between mb-3">
+                <DialogTitle className="text-sm font-mono">
                   Post #{post.id}
                 </DialogTitle>
-                <div className="flex items-center gap-2 shrink-0">
-                  <Button
-                    variant={fav ? 'default' : 'outline'}
-                    size="sm"
-                    className="h-7 text-xs gap-1"
-                    onClick={() => toggleFavorite(post)}
-                  >
-                    <Heart className={`h-3.5 w-3.5 ${fav ? 'fill-current' : ''}`} />
-                    {fav ? 'Favorited' : 'Favorite'}
-                  </Button>
-                  {isVideo && (
-                    <Badge variant="secondary" className="text-[10px] gap-1">
-                      <Play className="h-3 w-3 fill-current" />
-                      VIDEO
-                    </Badge>
-                  )}
-                </div>
+                {isVideo && (
+                  <Badge variant="secondary" className="text-[10px] gap-1">
+                    <Play className="h-3 w-3 fill-current" />
+                    VIDEO
+                  </Badge>
+                )}
               </div>
               <dl className="space-y-2 text-xs">
                 <div className="flex justify-between gap-2">
@@ -2373,92 +2115,6 @@ function InfiniteScrollSentinel() {
         </Button>
       )}
     </div>
-  );
-}
-
-/* --------------------------- favorites view ----------------------- */
-
-function FavoritesView() {
-  const { favorites, removeFavorite } = useBooruStore();
-  const [activeIndex, setActiveIndex] = useState<number | null>(null);
-
-  // Lightbox keyboard nav
-  useEffect(() => {
-    if (activeIndex === null) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setActiveIndex(null);
-      if (e.key === 'ArrowRight')
-        setActiveIndex((i) =>
-          i === null ? i : Math.min(i + 1, favorites.length - 1)
-        );
-      if (e.key === 'ArrowLeft')
-        setActiveIndex((i) => (i === null ? i : Math.max(i - 1, 0)));
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [activeIndex, favorites.length]);
-
-  if (favorites.length === 0) {
-    return (
-      <section className="mt-16 text-center space-y-4">
-        <div className="mx-auto h-20 w-20 rounded-2xl bg-gradient-to-br from-muted to-muted/50 flex items-center justify-center shadow-sm">
-          <Heart className="h-9 w-9 text-muted-foreground" />
-        </div>
-        <div className="space-y-2">
-          <p className="text-xl font-semibold tracking-tight">No favorites yet</p>
-          <p className="text-sm text-muted-foreground max-w-md mx-auto">
-            Click the heart icon on any post in search results to save it here.
-            Your favorites are stored in your browser and persist across
-            sessions.
-          </p>
-        </div>
-      </section>
-    );
-  }
-
-  return (
-    <section className="mt-6 space-y-4">
-      <div className="flex items-center justify-between text-xs text-muted-foreground">
-        <span>
-          <strong className="text-foreground">{favorites.length}</strong>{' '}
-          favorited {favorites.length === 1 ? 'post' : 'posts'}
-        </span>
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-7 text-xs gap-1"
-          onClick={() => {
-            if (
-              confirm(
-                `Remove all ${favorites.length} favorites? This cannot be undone.`
-              )
-            ) {
-              favorites.forEach((f) => removeFavorite(f.id));
-            }
-          }}
-        >
-          <Trash2 className="h-3.5 w-3.5" />
-          Clear all
-        </Button>
-      </div>
-
-      <div className="columns-2 sm:columns-3 md:columns-4 lg:columns-5 gap-3 [column-fill:_balance]">
-        {favorites.map((p, i) => (
-          <ImageCard
-            key={`fav-${p.id}-${i}`}
-            post={p}
-            onClick={() => setActiveIndex(i)}
-          />
-        ))}
-      </div>
-
-      <Lightbox
-        posts={favorites}
-        index={activeIndex}
-        onClose={() => setActiveIndex(null)}
-        onNav={setActiveIndex}
-      />
-    </section>
   );
 }
 

@@ -39,45 +39,64 @@ interface RawPost {
   large_file_url?: string;
   file_preview_url?: string;
   file_ext?: string;
-  tags?: string | string[];
+  tags?: string | string[] | Record<string, string[]>;
   tag_string?: string;
   tag_string_general?: string;
-  score?: number | string;
+  score?: number | string | { total?: number; up?: number; down?: number };
   rating?: string;
   width?: number | string;
   height?: number | string;
   source?: string;
+  sources?: string[];
+  // e621 nested structure
+  file?: { url?: string; ext?: string; width?: number; height?: number };
+  preview?: { url?: string };
+  sample?: { url?: string | null };
 }
 
-function parseTags(tags: string | string[] | undefined): string[] {
+function parseTags(tags: string | string[] | Record<string, string[]> | undefined): string[] {
   if (!tags) return [];
   if (Array.isArray(tags)) return tags;
-  return tags.split(' ').filter(Boolean);
+  if (typeof tags === 'string') return tags.split(' ').filter(Boolean);
+  // e621: tags is an object with category arrays like { general: [...], character: [...] }
+  if (typeof tags === 'object') {
+    return Object.values(tags).flat();
+  }
+  return [];
 }
 
 function toNumber(v: unknown): number {
+  if (typeof v === 'object' && v !== null && 'total' in v) {
+    // e621 score object: { total, up, down }
+    return toNumber((v as { total?: number }).total);
+  }
   const n = typeof v === 'string' ? parseInt(v, 10) : (v as number);
   return Number.isFinite(n) ? (n as number) : 0;
 }
 
 function normalizePost(p: RawPost): NormalizedPost {
-  const file_url = p.file_url ?? null;
+  // Handle e621's nested structure
+  const file_url = p.file_url ?? p.file?.url ?? null;
   const preview_url =
-    p.preview_url ?? p.preview_file_url ?? p.file_preview_url ?? null;
-  const sample_url = p.sample_url ?? p.large_file_url ?? null;
+    p.preview_url ?? p.preview_file_url ?? p.file_preview_url ?? p.preview?.url ?? null;
+  const sample_url = p.sample_url ?? p.large_file_url ?? p.sample?.url ?? null;
+  const file_ext = p.file_ext ?? p.file?.ext ?? null;
+  const width = p.width ?? p.file?.width ?? null;
+  const height = p.height ?? p.file?.height ?? null;
+  const source = p.source ?? (p.sources && p.sources.length > 0 ? p.sources[0] : null);
 
   return {
     id: p.id ?? Math.random().toString(36).slice(2),
     file_url,
     preview_url,
     sample_url,
-    file_ext: p.file_ext ?? null,
+    file_ext,
     tags: parseTags(p.tags ?? p.tag_string ?? p.tag_string_general),
     score: toNumber(p.score),
     rating: p.rating ?? 'unknown',
-    width: p.width != null ? toNumber(p.width) : null,
-    height: p.height != null ? toNumber(p.height) : null,
-    source: p.source ?? null,
+    width: width != null ? toNumber(width) : null,
+    height: height != null ? toNumber(height) : null,
+    source,
   };
 }
 
@@ -85,9 +104,10 @@ function extractPosts(json: unknown): RawPost[] {
   // Array directly — Danbooru, Gelbooru v1 dapi
   if (Array.isArray(json)) return json as RawPost[];
 
-  // Gelbooru newer: { "@attributes": {...}, "post": [...] } OR { "post": [...] }
+  // Object with posts array — e621 ({ posts: [...] }), Gelbooru ({ post: [...] })
   if (json && typeof json === 'object') {
     const obj = json as Record<string, unknown>;
+    if (Array.isArray(obj.posts)) return obj.posts as RawPost[];
     if (Array.isArray(obj.post)) return obj.post as RawPost[];
     if (obj.id || obj.file_url) return [obj as unknown as RawPost];
   }
@@ -124,12 +144,21 @@ export async function GET(req: NextRequest) {
   }
 
   try {
+    // Use browser-like headers for sites behind Cloudflare (e621, etc.)
+    const headers: Record<string, string> = {
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      Accept: 'application/json, text/javascript, */*; q=0.01',
+      'Accept-Language': 'en-US,en;q=0.9',
+    };
+    // e621 requires a Referer matching its origin + special headers
+    if (parsed.host.includes('e621')) {
+      headers['Referer'] = 'https://e621.net/';
+      headers['Origin'] = 'https://e621.net';
+    }
+
     const upstream = await fetch(parsed.toString(), {
-      headers: {
-        'User-Agent':
-          'BooruImageViewer/1.0 (web frontend; contact: user@example.com)',
-        Accept: 'application/json, text/plain, */*',
-      },
+      headers,
       redirect: 'follow',
       signal: AbortSignal.timeout(15_000),
     });
@@ -167,27 +196,6 @@ export async function GET(req: NextRequest) {
         },
         { status: 502 }
       );
-    }
-
-    // Detect auth-error strings that some boorus return with HTTP 200.
-    // Rule34 returns: "Missing authentication. Go to api.rule34.xxx for more information"
-    // Gelbooru returns similar strings when auth is missing.
-    if (typeof json === 'string') {
-      const lower = json.toLowerCase();
-      if (
-        lower.includes('missing authentication') ||
-        lower.includes('authentication required') ||
-        lower.includes('api key') ||
-        lower.includes('unauthorized')
-      ) {
-        return NextResponse.json(
-          {
-            error: 'Upstream returned HTTP 401 Unauthorized',
-            detail: json,
-          },
-          { status: 502 }
-        );
-      }
     }
 
     const posts = extractPosts(json).map(normalizePost);

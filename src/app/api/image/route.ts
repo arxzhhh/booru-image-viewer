@@ -26,6 +26,7 @@ const HOTLINK_HOSTS: { pattern: RegExp; referer: string }[] = [
   { pattern: /yande\.re$/i, referer: 'https://yande.re/' },
   { pattern: /konachan\.com$/i, referer: 'https://konachan.com/' },
   { pattern: /konachan\.net$/i, referer: 'https://konachan.net/' },
+  { pattern: /e621\.net$/i, referer: 'https://e621.net/' },
 ];
 
 function refererFor(host: string): string | null {
